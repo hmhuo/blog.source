@@ -1,0 +1,593 @@
+# -*- coding:utf-8 -*-
+import os
+import sys
+import time
+import json
+import logging
+import time,datetime
+import tornado.httpserver
+import tornado.web
+import tornado.ioloop
+import tornado.options
+import multiprocessing
+from tornado.options import define, options
+from tornado import websocket
+import sqlite3
+
+reload(sys)
+sys.setdefaultencoding( "utf-8" )
+
+vnc_client={"http://10.10.111.120:6080":"CY_0",
+            "http://10.10.111.120:6081":"CY_1",
+            "http://10.10.111.120:6082":"CY_2",
+            "http://10.10.111.120:6083":"CY_3",
+            "http://10.10.111.122:6084":"CY_4",
+            "http://10.10.111.122:6085":"CY_5",
+            "http://10.10.111.122:6086":"CY_6",
+            "http://10.10.111.122:6087":"CY_7",
+            "http://10.10.111.123:6088":"CY_8",
+            "http://10.10.111.123:6089":"CY_9",
+            "http://10.10.111.123:6090":"CY_10",
+            "http://10.10.111.123:6091":"CY_11",
+            "http://10.10.111.124:6092":"CY_12",
+            "http://10.10.111.124:6093":"CY_13",
+            "http://10.10.111.124:6094":"CY_14",
+            "http://10.10.111.124:6095":"CY_15",
+            "http://10.10.111.125:6096":"CY_16",
+            "http://10.10.111.125:6097":"CY_17",
+            "http://10.10.111.125:6098":"CY_18",
+            "http://10.10.111.125:6099":"CY_19",
+            "http://10.10.111.126:6100":"CY_20",
+            "http://10.10.111.126:6101":"CY_21",
+            "http://10.10.111.126:6102":"CY_22",
+            "http://10.10.111.126:6103":"CY_23",
+            "http://10.10.111.121:6080":"EG_A",
+            "http://10.10.111.121:6081":"EG_B",
+            "http://10.10.111.121:6082":"EG_C",
+            "http://10.10.111.121:6083":"EG_D",
+            "http://10.10.111.7:6089":"EG_J",
+            "http://10.10.111.7:6090":"EG_K",
+            "http://10.10.111.7:6091":"EG_L",
+            "http://10.10.111.7:6092":"EG_M",
+            "http://10.10.111.8:6093":"EG_N",
+            "http://10.10.111.8:6094":"EG_O",
+            "http://10.10.111.8:6095":"EG_P",
+            "http://10.10.111.8:6096":"EG_Q"                
+}
+
+define("port", default=8000, help="run on the given port", type=int)
+
+online_list = []
+vnc_online_list = []
+main_online_list = []
+
+database_name = 'cy_server_data'
+
+def GetNowTime():
+    return time.strftime("%Y-%m-%d %H:%M:%S",time.localtime(time.time()))
+
+#database  operation
+#table↓
+
+#vnc_access_log
+#cyassistant_access_log
+#
+#
+#
+#time client_ip username
+#
+#CREATE TABLE webmain_access_log                (id INTEGER PRIMARY KEY, username VARCHAR(100),client_ip VARCHAR(100),time VARCHAR(100))
+#CREATE TABLE webvnc_access_log                 (id INTEGER PRIMARY KEY, username VARCHAR(100),client_ip VARCHAR(100),time VARCHAR(100))
+#CREATE TABLE webcyassistant_access_log         (id INTEGER PRIMARY KEY, username VARCHAR(100),client_ip VARCHAR(100),time VARCHAR(100))
+#CREATE TABLE webcyassist_statistics_access_log (id INTEGER PRIMARY KEY, username VARCHAR(100),client_ip VARCHAR(100),time VARCHAR(100))
+#
+#con = sqlite3.connect(database_name)
+#insert_web_access_log(str(params['State'])[2:-2], 
+# str(params['Time'])[2:-2],
+# str(params['Hostname'])[2:-2],
+# str(params['LocalIP'])[2:-2],
+# str(params['LocalIP'])[2:-2],
+# str(params['Workpath'])[2:-2],
+# str(params['Edition'])[2:-2])
+# '''
+# 增加log 
+# '''
+# def insert_web_access_log(con,cy_state,cy_time,cy_hostname,cy_localIP,cy_MachineIP,cy_Workpath,cy_Edition):  
+#     cur = con.cursor()
+#     cur.execute('INSERT INTO server_log (id, cy_state,cy_time,cy_hostname,cy_localIP,cy_MachineIP,cy_Workpath,cy_Edition) \
+#         VALUES(NULL, "' + cy_state+'","' + cy_time+'","' + cy_hostname+'","' + cy_localIP+'","' + cy_MachineIP+'","' +cy_Workpath+'","'+cy_Edition+'")')
+#     con.commit()
+#insert_web_access_log("webmain_access_log",tornado.escape.xhtml_escape(self.current_user),self.request.remote_ip,GetNowTime())
+#webvnc_access_log    webcyassistant_access_log  webcyassist_statistics_access_log 
+#insert_web_access_log(con,"webmain_access_log",name,self.request.remote_ip,GetNowTime())
+# '''INSERT INTO webmain_access_log  (id, username,client_ip, time ) VALUES(NULL,%s ,%s ,%s  );
+# 增加web 访问 log 
+# '''
+def insert_web_access_log(itablename,iusername,iclient_ip,itime):
+    con = sqlite3.connect(database_name)
+    cur = con.cursor()
+    try:
+        cur.execute("INSERT INTO "+itablename+" (id, username,client_ip, time ) VALUES(NULL, \"" + str(iusername) + "\",\"" + str(iclient_ip)+"\" , \"" + str(itime) + "\");")
+        pass
+    except Exception, e:
+        print "SQL ERROR:"+str(e)
+        raise
+    con.commit()
+
+#base 寄存cookie
+class BaseHandler(tornado.web.RequestHandler):
+    def get_current_user(self):
+        return self.get_secure_cookie('user')
+    # def get_template_path(self):
+    #     return os.path.join(os.path.dirname(__file__),'templates')
+
+
+
+
+#主页面
+class webmainHandler(BaseHandler):
+    @tornado.web.asynchronous
+    @tornado.web.authenticated
+    def get(self):
+        web_access_name=tornado.escape.xhtml_escape(self.current_user)
+        content = web_access_name
+        items = ["Item 1", "Item 2", "Item 3"]
+        self.render("index.html",title="你好 "+web_access_name, items=items,color="#00FF00")
+        insert_web_access_log("webmain_access_log",web_access_name,self.request.remote_ip,GetNowTime())
+        # self.write('Hello '+name)
+
+
+
+
+
+    def post(self, name):
+        name = tornado.escape.xhtml_escape(self.current_user)
+
+        msg = self.get_argument("comment")
+        temp = {"auther": name, "time": "Nov 26 2013 10:30:00", "content": msg}
+
+        conn = pymongo.Connection("localhost", 27017)
+        db = conn.twitterDB
+        userSets = db.userSets
+
+        if msg is not None:
+            doc = userSets.find_one({"name": name})
+            doc['twitters'].insert(0, temp)
+            userSets.save(doc)
+            self.write("1")
+
+#登录 输入用户名页面
+class LoginHandler(BaseHandler):
+    def lower(self,string):
+        return string.lower()
+
+    def get(self):
+        self.render('login.html')
+
+
+    def post(self):
+        # print self.request
+        print "get argument:"+str(self.get_argument('username'))
+        if not self.request.headers.get('Cookie'):
+            self.write('Please enable your Cookie option of your broswer.')
+            return
+        self.set_secure_cookie('user',self.get_argument('username'),expires_days=100)
+        self.redirect('/')
+
+#小明助手页面
+class webcyassistmngHandler(BaseHandler):
+    @tornado.web.asynchronous
+    @tornado.web.authenticated
+    def get(self):
+
+        web_access_name=tornado.escape.xhtml_escape(self.current_user)
+        # self.write(str(online_list))
+        self.render('webcyassistmng.html')
+        #webvnc_access_log    webcyassistant_access_log  webcyassist_statistics_access_log 
+        insert_web_access_log("webcyassistant_access_log",web_access_name,self.request.remote_ip,GetNowTime())
+
+
+#小明助手客户端websocket Handler
+class CYassistHandler(websocket.WebSocketHandler):
+    clients = set()
+    cy_host = None
+
+
+
+
+    def check_origin(self, origin):
+        return True
+
+
+    def open(self):
+        print "\n\n\nCYassistHandler on_open"
+        CYassistHandler.clients.add(self)
+
+
+
+    def on_message(self, imessage):
+        print "\n\n\nCYassistHandler on_message:"
+        try:
+            self.cy_host = eval(imessage)
+            if self.cy_host["State"] == 'open':
+                print self.cy_host
+                online_list.append(self.cy_host); 
+                # print online_list
+            
+        except Exception, e:
+            print ""+str(e)
+            print imessage
+
+
+        print "\n"+str(self.request)+"\n"
+        self.write_message("ok!")
+        webcyassist_wsHandler.send_updates(online_list)
+
+
+    def on_close(self):
+        print "\n\n\nCYassistHandler on_close"
+        CYassistHandler.clients.remove(self); 
+        try:
+            online_list.remove(self.cy_host); 
+        except Exception, e:
+            print "on close error:"+str(e)
+        webcyassist_wsHandler.send_updates(online_list)
+
+
+
+
+
+    def itest(self):
+        self.write_message("ok!")
+
+#小明助手网页websocket Handler
+class webcyassist_wsHandler(websocket.WebSocketHandler):
+    clients = set()
+    cy_host = None
+
+    def check_origin(self, origin):
+        return True
+
+
+    def open(self):
+        print "\n\n\nweb_ws on_open"
+        webcyassist_wsHandler.clients.add(self)
+        # print self.request
+
+
+    def on_message(self, imessage):
+        print "\n\n\nweb_ws on_message:"+str(imessage)
+        # print self.request
+        webcyassist_wsHandler.send_updates(online_list)
+
+
+    @classmethod
+    def send_updates(cls, chat):
+        print "webcyassist_wsHandler  send_updates"
+        logging.info("sending message to %d clients", len(cls.clients))
+        for waiter in cls.clients:
+            try:
+                print "webcyassist_wsHandler  send_updates   add +++"
+                online_list.sort()
+                data1 = json.dumps(online_list)
+                waiter.write_message(data1)
+            except:
+                logging.error("Error sending message", exc_info=True)
+
+
+
+
+    def on_close(self):
+        print "\n\n\nweb_ws on_close"
+        webcyassist_wsHandler.clients.remove(self)
+        print self.request
+
+#测试网页
+class Test2Handler(BaseHandler):
+
+    def get(self):
+
+        print self.request.uri
+        if self.request.uri == "/test2":
+            self.render('test2.html')
+        else:
+            self.write("hello!!!")
+
+
+
+    def post(self):
+        # print self.request
+        print "post on \n"
+        print self.get_argument('value')
+        if self.get_argument('value') == 'getcyassis':
+            self.write(str(online_list))
+        else:
+            self.write("hello!!!")
+
+
+
+        '''
+        if not self.request.headers.get('Cookie'):
+            self.write('Please enable your Cookie option of your broswer.')
+            return
+        self.set_secure_cookie('user',self.get_argument('username'),expires_days=1)
+        self.redirect('/')
+        '''
+
+
+
+
+#小明VNC页面
+class webvncmngHandler(BaseHandler):
+    @tornado.web.asynchronous
+    @tornado.web.authenticated
+    def get(self):
+        self.render('webvncmng.html')
+        web_access_name=tornado.escape.xhtml_escape(self.current_user)
+        #webvnc_access_log    webcyassistant_access_log  webcyassist_statistics_access_log 
+        insert_web_access_log("webvnc_access_log",web_access_name,self.request.remote_ip,GetNowTime())
+
+
+
+
+
+#小明VNC客户端websocket Handler
+class cyvncHandler(websocket.WebSocketHandler):
+    clients = set()
+    a = None
+    def check_origin(self, origin):
+        return True
+
+    def open(self):
+        print "\n\n\nvnc on_open "+self.request.remote_ip
+        cyvncHandler.clients.add(self)
+        name=self.get_secure_cookie('user')
+        self.data={ "Hostname":name,
+                    "LocalIP":self.request.remote_ip,
+                    "State":vnc_client[self.request.headers["Origin"]],
+                    "Time":str(GetNowTime())
+                    }
+        vnc_online_list.append(self.data)
+        webcyvnc_wsHandler.send_updates(vnc_online_list)
+        insert_web_access_log("webvnc_access_log",str(vnc_client[self.request.headers["Origin"]]),self.request.remote_ip,GetNowTime())
+        #主页更新
+        main_online_list.append(self.data)
+        main_wsHandler.send_updates(main_online_list)
+
+
+    def on_message(self, imessage):
+        print "\n\n\nvnc on_message:"
+        # print self.request
+
+    def on_close(self):
+        print "\n\n\nvnc on_close"
+        cyvncHandler.clients.remove(self)
+        try:
+            main_online_list.remove(self.data)
+            vnc_online_list.remove(self.data);
+        except Exception, e:
+            print "on close error:"+str(e)
+        webcyvnc_wsHandler.send_updates(vnc_online_list)
+        main_wsHandler.send_updates(main_online_list)
+
+
+#小明VNC网页websocket Handler
+class webcyvnc_wsHandler(websocket.WebSocketHandler):
+    clients = set()
+    cy_host = None
+
+    def check_origin(self, origin):
+        return True
+
+
+    def open(self):
+        print "\n\n\nwebcyvnc_ws on_open"
+        webcyvnc_wsHandler.clients.add(self)
+
+
+
+
+
+
+
+    def on_message(self, imessage):
+        print "\n\n\nwebcyvnc_ws on_message:"+str(imessage)
+        print self.request
+        webcyvnc_wsHandler.send_updates(vnc_online_list)
+
+
+    @classmethod
+    def send_updates(cls, chat):
+        print "webcyvnc_ws"
+        logging.info("sending message to %d clients", len(cls.clients))
+        for waiter in cls.clients:
+            try:
+                print "webcyvnc_ws CISCO CISCO"
+                vnc_online_list.sort()
+                # print vnc_online_list
+                data1 = json.dumps(vnc_online_list)
+                waiter.write_message(data1)
+            except:
+                logging.error("Error sending message", exc_info=True)
+
+
+
+
+    def on_close(self):
+        print "\n\n\nwebcyvnc_ws on_close"
+        webcyvnc_wsHandler.clients.remove(self)
+        # print self.request
+
+
+
+
+#主页的websocket Handler
+class main_wsHandler(websocket.WebSocketHandler):
+    clients = set()
+    cy_host = None
+
+    def check_origin(self, origin):
+        return True
+
+
+ 
+    def open(self):
+        print "\n\n\nmain_ws on_open "+self.request.remote_ip
+        main_wsHandler.clients.add(self)
+        name=self.get_secure_cookie('user')
+        self.data={ "Hostname":name,
+                    "LocalIP":self.request.remote_ip,
+                    "Time":str(GetNowTime())
+                    }
+        main_online_list.append(self.data)
+        main_wsHandler.send_updates(main_online_list)
+        insert_web_access_log("webmain_access_log","web_access_ws",self.request.remote_ip,GetNowTime())
+
+
+
+
+
+
+    def on_message(self, imessage):
+        print "\n\n\nmain_ws on_message:"+str(imessage)
+        # print self.request
+        self.hostdata = eval(imessage)
+        self.cy_users_list=[]
+        try:
+            if  self.hostdata["status"] == "get_cy":
+                
+                for i in range (len(vnc_online_list)):
+                    if vnc_online_list[i]['State']==self.hostdata["input"]:
+                        print str(vnc_online_list[i]['LocalIP'])  + " is using "+ str(self.hostdata["input"])
+                        self.cy_users_list.append(vnc_online_list[i])
+
+                if len(self.cy_users_list)==0:
+                    print "no one use "  + str(self.hostdata["input"])
+                data2 = json.dumps(self.cy_users_list)
+                self.write_message(data2)
+
+        except Exception, e:
+            print "Error" + str(e)
+
+
+
+        main_wsHandler.send_updates(main_online_list)
+
+
+    @classmethod
+    def send_updates(cls, chat):
+        print "main_ws  send_updates function"
+        # print main_online_list
+        logging.info("sending message to %d clients", len(cls.clients))
+        for waiter in cls.clients:
+            try:
+                main_online_list.sort()
+                # print main_online_list
+                data1 = json.dumps(main_online_list)
+                waiter.write_message(data1)
+            except:
+                logging.error("Error sending message", exc_info=True)
+
+
+
+
+    def on_close(self):
+        print "\n\n\nwebcyvnc_ws on_close"
+        main_online_list.remove(self.data)
+        main_wsHandler.clients.remove(self)
+        main_wsHandler.send_updates(main_online_list)
+        # print self.request
+
+
+
+
+
+
+ #小明助手统计页面
+class webcyassist_statisticsHandler(BaseHandler):
+    @tornado.web.asynchronous
+    @tornado.web.authenticated
+    def get(self):
+
+
+
+        con = sqlite3.connect("cy_server_data")
+        result_data1 = []
+        data_time = []
+        data_data = []
+        cur = con.cursor()
+        cur.execute("select distinct  substr(cy_time,0,11)  from server_log ORDER BY  substr(cy_time,0,11) DESC")
+        result_time1 = cur.fetchall()
+
+        days=15
+
+        for i in range(0,days):
+            sql_text1=u"select count(*)  from server_log where   substr(cy_time,0,11) = '"+str(result_time1[i][0])+"'  "
+            cur.execute(sql_text1)
+            tmp1 =cur.fetchall()
+            result_data1.append(tmp1[0][0])
+            data_time.append(str(result_time1[i][0]))
+            data_data.append(str(result_data1[i]))
+
+
+        # self.write(str(online_list))
+        self.render('webcyassist_statistics.html',time=data_time,data=data_data,days=days)
+        web_access_name=tornado.escape.xhtml_escape(self.current_user)
+        #webvnc_access_log    webcyassistant_access_log  webcyassist_statistics_access_log 
+        insert_web_access_log("webcyassist_statistics_access_log",web_access_name,self.request.remote_ip,GetNowTime())
+
+
+
+
+
+
+
+settings={
+    'template_path': os.path.join(os.path.dirname(__file__),"templates"),
+    'static_path':os.path.join(os.path.dirname(__file__),'static'),
+    'cookie_secret':'F/hsxF7kTIWGO1F6HrH78Rf4bMRe5EyFhjtReh6x+/E=',
+    'login_url':'/login',
+    'debug':True,
+}
+
+
+app = tornado.web.Application([
+        (r'/',webmainHandler),                                  #主页面
+        (r'/main_ws',main_wsHandler),                        #主页的websocket Handler
+
+        (r'/login',LoginHandler),                            #登录 输入用户名页面
+
+        (r"/webcyassistmng",      webcyassistmngHandler),    #小明助手页面
+        (r"/cy_assistant",      CYassistHandler),            #小明助手客户端websocket Handler
+        (r"/webcyassist_ws",    webcyassist_wsHandler),      #小明助手网页websocket Handler
+
+        (r"/webcyassist_statistics",    webcyassist_statisticsHandler),      #小明助手统计页面
+
+        (r"/webvncmng",         webvncmngHandler),           #小明vnc页面
+        (r"/cy_vnc",            cyvncHandler),               #小明vnc客户端websocket Handler
+        (r"/webvnc_ws",         webcyvnc_wsHandler),         #小明vnc网页websocket Handler
+
+        (r"/test2", Test2Handler),                           #测试网页
+],**settings)
+
+
+
+
+def run(mid,port):
+        print "Process %d start" % mid
+        sys.stdout.flush()
+        app.listen(port)
+        tornado.ioloop.IOLoop.instance().start()
+
+if __name__ == '__main__':
+    tornado.options.parse_command_line()
+    mp=0
+    if mp==0:
+        app.listen(options.port)
+        tornado.ioloop.IOLoop.instance().start()
+    else:
+        jobs=list()
+        for mid,port in enumerate(range(9010,9014)):
+            p=multiprocessing.Process(target=run,args=(mid,port))
+            jobs.append(p)
+            p.start()
